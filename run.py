@@ -302,12 +302,13 @@ def main():
     ]
 
     location = os.getenv("LOCATION", "United States")
-    max_workers = int(os.getenv("MAX_WORKERS", "3"))
+    max_workers = int(os.getenv("MAX_WORKERS", "15"))
     proxies = os.getenv("PROXIES")
     max_jobs_env = os.getenv("MAX_JOBS")
     max_jobs = int(max_jobs_env) if max_jobs_env and max_jobs_env.strip().isdigit() and int(max_jobs_env) > 0 else None
     max_jobs_per_kw_env = os.getenv("MAX_JOBS_PER_KEYWORD", "100")
     max_jobs_per_kw = int(max_jobs_per_kw_env) if max_jobs_per_kw_env.strip().isdigit() and int(max_jobs_per_kw_env) > 0 else 100
+    keyword_delay = int(os.getenv("KEYWORD_DELAY", "30"))
 
     # Initialize scraper and database
     scraper = LinkedInScraper(proxies=proxies, use_database=True)
@@ -348,7 +349,9 @@ def main():
 
     print(f"\n▶ Starting at keyword index: {start_index}")
     print(f"📊 Keywords to process: {len(all_keywords)} -> {all_keywords}")
+    print(f"⚡ Parallel workers: {max_workers}")
     print(f"🎯 Keyword limit: up to {max_jobs_per_kw} jobs/keyword (posted in last 24h)")
+    print(f"⏱️ Rotation pause: {keyword_delay} seconds between keyword rotations")
     print(f"💾 Real-time storage: ENABLED (Saving to Neon DB [{backend}])")
     if max_jobs:
         print(f"🧪 Test Mode: ACTIVE (Global limit: {max_jobs} jobs)")
@@ -358,66 +361,94 @@ def main():
     else:
         print("🌐 Proxy rotation: DISABLED (Direct connection)")
 
+    continuous_mode = os.getenv("CONTINUOUS_MODE", "true").lower() in ("true", "1", "yes")
+    if custom_keyword or max_jobs:
+        continuous_mode = False
+
     start_time = time.time()
     total_jobs = 0
+    rotation_cycle = 1
 
     try:
-        for i in range(start_index, len(all_keywords)):
-            keyword = all_keywords[i]
+        while True:
+            if rotation_cycle > 1:
+                print("\n" + "=" * 70)
+                print(f"🔄 STARTING KEYWORD ROTATION CYCLE #{rotation_cycle}")
+                print("=" * 70)
+                domain_filter = os.getenv("DOMAIN_FILTER") or os.getenv("CRM_DOMAIN_FILTER")
+                client_keywords = scraper.db.get_client_search_keywords(domain_filter=domain_filter) if scraper.db else []
+                if client_keywords:
+                    all_keywords = client_keywords
+                    print(f"📋 Refreshed {len(all_keywords)} desired job title(s) from active clients")
 
-            print("\n" + "-" * 60)
-            print(f"🔍 Scraping keyword {i+1}/{len(all_keywords)}: {keyword}")
-            print("-" * 60)
+            for i in range(start_index, len(all_keywords)):
+                keyword = all_keywords[i]
 
-            if max_jobs and total_jobs >= max_jobs:
-                print(f"\n🎯 Test limit of {max_jobs} jobs reached across run. Stopping.")
-                break
-
-            remaining_jobs = (max_jobs - total_jobs) if max_jobs else None
-
-            try:
-                # The scraper now saves jobs in real-time internally if save_to_db=True
-                jobs = scraper.scrape_all_jobs_batch(
-                    keywords=[keyword],
-                    location=location,
-                    max_workers=max_workers,
-                    save_to_db=True,
-                    max_jobs=remaining_jobs,
-                    max_jobs_per_keyword=max_jobs_per_kw,
-                )
-                
-                # Optional: Post-process external links if needed
-                redirected = 0
-                for job in jobs:
-                    if job.apply_url and "linkedin.com/jobs/redirect" in job.apply_url:
-                        original = job.apply_url
-                        resolved = extract_external_link(original)
-                        if resolved != original:
-                            job.apply_url = resolved
-                            job.job_url_direct = resolved
-                            redirected += 1
-                
-                if redirected:
-                    print(f"🔗 Resolved {redirected} external redirect(s) for '{keyword}'")
-                
-                total_jobs += len(jobs)
-                
-                # Update progress in Neon DB (only for default multi-keyword runs)
-                if not custom_keyword and scraper.db:
-                    scraper.db.update_progress(i + 1)
+                print("\n" + "-" * 60)
+                print(f"🔍 [Cycle {rotation_cycle}] Scraping keyword {i+1}/{len(all_keywords)}: {keyword}")
+                print("-" * 60)
 
                 if max_jobs and total_jobs >= max_jobs:
-                    print(f"\n🎯 Test limit of {max_jobs} jobs reached. Completing test run.")
+                    print(f"\n🎯 Test limit of {max_jobs} jobs reached across run. Stopping.")
                     break
 
-            except Exception as e:
-                print(f"❌ Error scraping keyword {keyword}: {e}")
-                # Don't update progress here to allow retry
-                raise
+                remaining_jobs = (max_jobs - total_jobs) if max_jobs else None
 
-        # Reset progress to 0 after full multi-keyword run
-        if not custom_keyword and scraper.db:
-            scraper.db.update_progress(0)
+                try:
+                    # The scraper now saves jobs in real-time internally if save_to_db=True
+                    jobs = scraper.scrape_all_jobs_batch(
+                        keywords=[keyword],
+                        location=location,
+                        max_workers=max_workers,
+                        save_to_db=True,
+                        max_jobs=remaining_jobs,
+                        max_jobs_per_keyword=max_jobs_per_kw,
+                    )
+                    
+                    # Optional: Post-process external links if needed
+                    redirected = 0
+                    for job in jobs:
+                        if job.apply_url and "linkedin.com/jobs/redirect" in job.apply_url:
+                            original = job.apply_url
+                            resolved = extract_external_link(original)
+                            if resolved != original:
+                                job.apply_url = resolved
+                                job.job_url_direct = resolved
+                                redirected += 1
+                    
+                    if redirected:
+                        print(f"🔗 Resolved {redirected} external redirect(s) for '{keyword}'")
+                    
+                    total_jobs += len(jobs)
+                    
+                    # Update progress in Neon DB (only for default multi-keyword runs)
+                    if not custom_keyword and scraper.db:
+                        scraper.db.update_progress(i + 1)
+
+                    if max_jobs and total_jobs >= max_jobs:
+                        print(f"\n🎯 Test limit of {max_jobs} jobs reached. Completing test run.")
+                        break
+
+                    if i < len(all_keywords) - 1:
+                        print(f"\n⏱️ Keyword '{keyword}' complete. Waiting {keyword_delay}s before next keyword rotation...")
+                        time.sleep(keyword_delay)
+
+                except Exception as e:
+                    print(f"❌ Error scraping keyword {keyword}: {e}")
+                    raise
+
+            # Reset progress to 0 after full multi-keyword run
+            if not custom_keyword and scraper.db:
+                scraper.db.update_progress(0)
+            start_index = 0
+
+            if not continuous_mode or (max_jobs and total_jobs >= max_jobs):
+                break
+
+            print(f"\n🔄 Full keyword rotation #{rotation_cycle} complete ({total_jobs} total jobs scraped so far)!")
+            print(f"⏱️ Waiting {keyword_delay} seconds before starting next rotation cycle...")
+            time.sleep(keyword_delay)
+            rotation_cycle += 1
 
     except KeyboardInterrupt:
         print("\n🛑 Scraper stopped by user. Progress saved.")

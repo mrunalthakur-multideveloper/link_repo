@@ -7063,13 +7063,14 @@ class LinkedInScraper:
         # Each worker thread will have its own isolated session clone.
         self._thread_local = threading.local()
 
-        # ── Rate limiting (Strict 3.0s pacing between requests) ────────────
-        self.min_delay = 3.0
-        self.max_delay = 3.0
-        self.current_delay = 3.0
+        # ── Rate limiting / thread pacing ─────────────────────────────────
+        self.worker_delay = float(os.getenv("WORKER_DELAY", "0.5"))
+        self.min_delay = 0.5
+        self.max_delay = 2.0
+        self.current_delay = 0.5
         self.consecutive_errors = 0
         self.max_consecutive_errors = 3
-        self.error_backoff = 1.0
+        self.error_backoff = 1.2
 
         # ── Thread safety for shared state ────────────────────────────────
         self._lock = threading.Lock()
@@ -7157,33 +7158,30 @@ class LinkedInScraper:
     # ─────────────────────────────────────────────────────────────────────────
 
     def _throttle(self):
-        """Apply strict 3-second pacing between scraping requests."""
-        with self._lock:
-            now = time.time()
-            elapsed = now - getattr(self, "_last_request_time", 0.0)
-            if elapsed < 3.0:
-                time.sleep(3.0 - elapsed)
-            self._last_request_time = time.time()
+        """Apply pacing per worker thread so parallel workers can run concurrently via rotating proxies."""
+        last_req = getattr(self._thread_local, "last_request_time", 0.0)
+        now = time.time()
+        elapsed = now - last_req
+        delay = getattr(self, "worker_delay", 0.5)
+        if elapsed < delay:
+            time.sleep(delay - elapsed)
+        self._thread_local.last_request_time = time.time()
 
     def _handle_error(self):
         """Increase delay on errors."""
         with self._lock:
             self.consecutive_errors += 1
             if self.consecutive_errors >= self.max_consecutive_errors:
-                self.current_delay = min(
-                    self.current_delay * self.error_backoff, self.max_delay
-                )
+                self.worker_delay = min(self.worker_delay * 1.5, 2.0)
                 self.consecutive_errors = 0
-                print(f"⚠️ Increasing delay to {self.current_delay:.1f}s due to errors")
+                print(f"⚠️ Increasing worker delay to {self.worker_delay:.1f}s due to errors")
 
     def _handle_success(self):
         """Gradually decrease delay on success."""
         with self._lock:
             self.consecutive_errors = 0
-            if self.current_delay > self.min_delay:
-                self.current_delay = max(
-                    self.current_delay / self.error_backoff, self.min_delay
-                )
+            if self.worker_delay > 0.5:
+                self.worker_delay = max(self.worker_delay / 1.2, 0.5)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Internal URL checker  (from Code A — used throughout)
@@ -7330,7 +7328,7 @@ class LinkedInScraper:
                     print(f"   🎯 Reached search candidate limit of {max_results} jobs for '{keyword}'")
                     break
 
-                time.sleep(3.0)
+                time.sleep(1.0)
 
             except Exception as e:
                 print(f"   ❌ Search error on page {page}: {e}")
@@ -7879,7 +7877,7 @@ class LinkedInScraper:
 
     def scrape_all_jobs_batch(self, keywords: List[str],
                               location: str = "United States",
-                              max_workers: int = 5,
+                              max_workers: int = 15,
                               save_to_db: bool = True,
                               csv_filename: str = None,
                               max_jobs: Optional[int] = None,
@@ -7908,7 +7906,7 @@ class LinkedInScraper:
         all_jobs = []
         seen_global_ids = set()
         total_keywords = len(keywords)
-        actual_workers = min(max_workers, 5)
+        actual_workers = max(1, max_workers)
 
         if not csv_filename:
             csv_filename = f"scraped_jobs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -7952,8 +7950,8 @@ class LinkedInScraper:
 
             if not keyword_results:
                 if idx < total_keywords - 1:
-                    delay = random.uniform(3, 6)
-                    print(f"   ⏱️  Waiting {delay:.1f}s before next keyword...")
+                    delay = int(os.getenv("KEYWORD_DELAY", "30"))
+                    print(f"   ⏱️  Waiting {delay}s before next keyword rotation...")
                     time.sleep(delay)
                 continue
 
@@ -8049,8 +8047,8 @@ class LinkedInScraper:
                 break
 
             if idx < total_keywords - 1:
-                delay = random.uniform(3, 6)
-                print(f"   ⏱️  Waiting {delay:.1f}s before next keyword...")
+                delay = int(os.getenv("KEYWORD_DELAY", "30"))
+                print(f"   ⏱️  Waiting {delay}s before next keyword rotation...")
                 time.sleep(delay)
 
         # ── Final summary ─────────────────────────────────────────────────────
