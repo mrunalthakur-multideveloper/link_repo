@@ -306,6 +306,8 @@ def main():
     proxies = os.getenv("PROXIES")
     max_jobs_env = os.getenv("MAX_JOBS")
     max_jobs = int(max_jobs_env) if max_jobs_env and max_jobs_env.strip().isdigit() and int(max_jobs_env) > 0 else None
+    max_jobs_per_kw_env = os.getenv("MAX_JOBS_PER_KEYWORD", "100")
+    max_jobs_per_kw = int(max_jobs_per_kw_env) if max_jobs_per_kw_env.strip().isdigit() and int(max_jobs_per_kw_env) > 0 else 100
 
     # Initialize scraper and database
     scraper = LinkedInScraper(proxies=proxies, use_database=True)
@@ -346,9 +348,10 @@ def main():
 
     print(f"\n▶ Starting at keyword index: {start_index}")
     print(f"📊 Keywords to process: {len(all_keywords)} -> {all_keywords}")
+    print(f"🎯 Keyword limit: up to {max_jobs_per_kw} jobs/keyword (posted in last 24h)")
     print(f"💾 Real-time storage: ENABLED (Saving to Neon DB [{backend}])")
     if max_jobs:
-        print(f"🧪 Test Mode: ACTIVE (Limit: {max_jobs} jobs)")
+        print(f"🧪 Test Mode: ACTIVE (Global limit: {max_jobs} jobs)")
     if proxies:
         proxy_display = proxies.split('@')[-1] if '@' in proxies else 'Enabled'
         print(f"🛡️ Proxy rotation: ENABLED ({proxy_display})")
@@ -380,6 +383,7 @@ def main():
                     max_workers=max_workers,
                     save_to_db=True,
                     max_jobs=remaining_jobs,
+                    max_jobs_per_keyword=max_jobs_per_kw,
                 )
                 
                 # Optional: Post-process external links if needed
