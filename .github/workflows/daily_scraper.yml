@@ -348,8 +348,12 @@ jobs:
 
       - name: Run scraper
         env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          INTERNAL_SERVICE_API_KEY: ${{ secrets.INTERNAL_SERVICE_API_KEY || 'applservice_key_2026' }}
+          CRM_BACKEND_URL: https://api.applyus.org
           LOCATION: United States
           MAX_WORKERS: 8
         run: |
