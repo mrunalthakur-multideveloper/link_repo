@@ -6935,7 +6935,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from bs4 import BeautifulSoup
 
-from .models import JobPost, Location, Compensation, JobType
+from .models import JobPost, Location, Compensation, JobType, Country
 from .constant import headers
 from .util import (
     parse_job_type,
@@ -7609,6 +7609,12 @@ class LinkedInScraper:
                 if location_tag:
                     location_str = location_tag.get_text(strip=True)
             location = Location.from_string(location_str) if location_str else Location()
+            search_loc = job_data.get("search_location") if job_data else None
+            if search_loc:
+                curr_country = getattr(location, "country", None)
+                curr_c_str = str(getattr(curr_country, "value", curr_country) or "").strip().lower()
+                if not curr_c_str or curr_c_str in ("unknown", "none"):
+                    location.country = search_loc
 
             # Date posted
             # Tries all known LinkedIn date selectors across view + api pages.
@@ -7929,7 +7935,7 @@ class LinkedInScraper:
                 break
 
             print(f"\n{'='*60}")
-            print(f"🔍 [{idx+1}/{total_keywords}] Keyword: {keyword}")
+            print(f"🔍 [{idx+1}/{total_keywords}] Keyword: '{keyword}' | Location: '{location}'")
             print(f"{'='*60}")
 
             # Fetch candidate jobs posted in last 24h (buffer up to 1.5x of per-keyword limit to account for easy-apply/rejected jobs)
@@ -7944,6 +7950,7 @@ class LinkedInScraper:
                 if job["job_id"] not in seen_global_ids:
                     seen_global_ids.add(job["job_id"])
                     job["keyword"] = keyword
+                    job["search_location"] = location
                     keyword_results.append(job)
 
             print(f"   📋 {len(keyword_results)} unique new jobs to fetch for '{keyword}' (target: up to {max_jobs_per_keyword})")

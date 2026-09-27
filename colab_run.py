@@ -11,6 +11,7 @@ ENV_TEMPLATE = """# ============================================================
 # AUTO-GENERATED CONFIGURATION FOR COLAB / CLOUD RUN
 # =============================================================================
 CRM_BACKEND_URL=https://api.applyus.org
+CRM_ENDPOINT_PATH=/api/clients/active
 INTERNAL_SERVICE_API_KEY=applservice_key_2026
 CRM_API_KEY=applservice_key_2026
 

@@ -317,41 +317,49 @@ def main():
         print("⚠️ Database not initialized. Check your Neon DB settings in .env")
 
     custom_keyword = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else None
+    custom_location = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("-") else os.getenv("LOCATION", "United States")
+
     if custom_keyword:
-        all_keywords = [custom_keyword]
+        search_targets = [{"keyword": custom_keyword, "country": custom_location}]
         start_index = 0
     else:
-        # Dynamically fetch desired job titles as search keywords from active clients endpoint (synced to Neon DB)
+        # Dynamically fetch (keyword, country) search targets from active clients endpoint (synced to Neon DB)
         domain_filter = os.getenv("DOMAIN_FILTER") or os.getenv("CRM_DOMAIN_FILTER")
-        client_keywords = scraper.db.get_client_search_keywords(domain_filter=domain_filter) if scraper.db else []
-        if client_keywords:
-            all_keywords = client_keywords
-            print(f"📋 Loaded {len(all_keywords)} desired job title(s) as search keyword(s) from active clients ({len(getattr(scraper.db, 'active_clients', []))} client(s))")
+        client_targets = scraper.db.get_client_search_targets(domain_filter=domain_filter) if scraper.db else []
+        if client_targets:
+            search_targets = client_targets
+            active_clients_count = len(getattr(scraper.db, 'active_clients', []))
+            print(f"📋 Loaded {len(search_targets)} unique (keyword, country) search target(s) from {active_clients_count} active client(s)")
         else:
             # Fallback to source database get_primary_functions or default_keywords
             db_functions = scraper.db.get_primary_functions() if scraper.db and scraper.db.initialized else []
+            default_loc = os.getenv("LOCATION", "United States")
             if db_functions:
-                all_keywords = db_functions
-                print(f"📋 Loaded {len(all_keywords)} primary function(s) from source table")
+                search_targets = [{"keyword": fn, "country": default_loc} for fn in db_functions]
+                print(f"📋 Loaded {len(search_targets)} primary function(s) from source table (location: '{default_loc}')")
             else:
-                print("ℹ️ No active clients or primary functions found. Using default keyword list.")
-                all_keywords = default_keywords
+                print(f"ℹ️ No active clients or primary functions found. Using default keyword list (location: '{default_loc}').")
+                search_targets = [{"keyword": kw, "country": default_loc} for kw in default_keywords]
 
-        # Progress retrieval from Supabase
+        # Progress retrieval from Neon DB
         start_index = scraper.db.get_progress() if scraper.db else 0
-        if start_index >= len(all_keywords):
-            print(f"🔄 Checkpoint index ({start_index}) is >= total keywords ({len(all_keywords)}). Resetting start index to 0.")
+        if start_index >= len(search_targets):
+            print(f"🔄 Checkpoint index ({start_index}) is >= total targets ({len(search_targets)}). Resetting start index to 0.")
             start_index = 0
             if scraper.db:
                 scraper.db.update_progress(0)
 
     backend = getattr(scraper.db, "backend_type", "connected") if scraper.db else "disabled"
 
-    print(f"\n▶ Starting at keyword index: {start_index}")
-    print(f"📊 Keywords to process: {len(all_keywords)} -> {all_keywords}")
+    print(f"\n▶ Starting at search target index: {start_index}")
+    print(f"📊 Targets to process: {len(search_targets)}")
+    for idx, st in enumerate(search_targets[:10]):
+        print(f"   {idx+1}. '{st['keyword']}' in '{st['country']}'")
+    if len(search_targets) > 10:
+        print(f"   ... and {len(search_targets) - 10} more target(s)")
     print(f"⚡ Parallel workers: {max_workers}")
-    print(f"🎯 Keyword limit: up to {max_jobs_per_kw} jobs/keyword (posted in last 24h)")
-    print(f"⏱️ Rotation pause: {keyword_delay} seconds between keyword rotations")
+    print(f"🎯 Target limit: up to {max_jobs_per_kw} jobs/target (posted in last 24h)")
+    print(f"⏱️ Rotation pause: {keyword_delay} seconds between target rotations")
     print(f"💾 Real-time storage: ENABLED (Saving to Neon DB [{backend}])")
     if max_jobs:
         print(f"🧪 Test Mode: ACTIVE (Global limit: {max_jobs} jobs)")
@@ -373,19 +381,21 @@ def main():
         while True:
             if rotation_cycle > 1:
                 print("\n" + "=" * 70)
-                print(f"🔄 STARTING KEYWORD ROTATION CYCLE #{rotation_cycle}")
+                print(f"🔄 STARTING SEARCH TARGET ROTATION CYCLE #{rotation_cycle}")
                 print("=" * 70)
                 domain_filter = os.getenv("DOMAIN_FILTER") or os.getenv("CRM_DOMAIN_FILTER")
-                client_keywords = scraper.db.get_client_search_keywords(domain_filter=domain_filter) if scraper.db else []
-                if client_keywords:
-                    all_keywords = client_keywords
-                    print(f"📋 Refreshed {len(all_keywords)} desired job title(s) from active clients")
+                refreshed_targets = scraper.db.get_client_search_targets(domain_filter=domain_filter) if scraper.db else []
+                if refreshed_targets:
+                    search_targets = refreshed_targets
+                    print(f"📋 Refreshed {len(search_targets)} unique (keyword, country) search target(s) from active clients")
 
-            for i in range(start_index, len(all_keywords)):
-                keyword = all_keywords[i]
+            for i in range(start_index, len(search_targets)):
+                target = search_targets[i]
+                keyword = target["keyword"]
+                target_country = target.get("country") or os.getenv("LOCATION", "United States")
 
                 print("\n" + "-" * 60)
-                print(f"🔍 [Cycle {rotation_cycle}] Scraping keyword {i+1}/{len(all_keywords)}: {keyword}")
+                print(f"🔍 [Cycle {rotation_cycle}] Scraping target {i+1}/{len(search_targets)}: '{keyword}' in '{target_country}'")
                 print("-" * 60)
 
                 if max_jobs and total_jobs >= max_jobs:
@@ -395,10 +405,10 @@ def main():
                 remaining_jobs = (max_jobs - total_jobs) if max_jobs else None
 
                 try:
-                    # The scraper now saves jobs in real-time internally if save_to_db=True
+                    # Dynamically pass keyword and target country into scraper
                     jobs = scraper.scrape_all_jobs_batch(
                         keywords=[keyword],
-                        location=location,
+                        location=target_country,
                         max_workers=max_workers,
                         save_to_db=True,
                         max_jobs=remaining_jobs,
@@ -417,11 +427,11 @@ def main():
                                 redirected += 1
                     
                     if redirected:
-                        print(f"🔗 Resolved {redirected} external redirect(s) for '{keyword}'")
+                        print(f"🔗 Resolved {redirected} external redirect(s) for '{keyword}' ({target_country})")
                     
                     total_jobs += len(jobs)
                     
-                    # Update progress in Neon DB (only for default multi-keyword runs)
+                    # Update progress in Neon DB (only for default multi-target runs)
                     if not custom_keyword and scraper.db:
                         scraper.db.update_progress(i + 1)
 
@@ -429,15 +439,15 @@ def main():
                         print(f"\n🎯 Test limit of {max_jobs} jobs reached. Completing test run.")
                         break
 
-                    if i < len(all_keywords) - 1:
-                        print(f"\n⏱️ Keyword '{keyword}' complete. Waiting {keyword_delay}s before next keyword rotation...")
+                    if i < len(search_targets) - 1:
+                        print(f"\n⏱️ Target '{keyword}' ({target_country}) complete. Waiting {keyword_delay}s before next rotation...")
                         time.sleep(keyword_delay)
 
                 except Exception as e:
-                    print(f"❌ Error scraping keyword {keyword}: {e}")
+                    print(f"❌ Error scraping target '{keyword}' in '{target_country}': {e}")
                     raise
 
-            # Reset progress to 0 after full multi-keyword run
+            # Reset progress to 0 after full multi-target run
             if not custom_keyword and scraper.db:
                 scraper.db.update_progress(0)
             start_index = 0
@@ -445,7 +455,7 @@ def main():
             if not continuous_mode or (max_jobs and total_jobs >= max_jobs):
                 break
 
-            print(f"\n🔄 Full keyword rotation #{rotation_cycle} complete ({total_jobs} total jobs scraped so far)!")
+            print(f"\n🔄 Full target rotation #{rotation_cycle} complete ({total_jobs} total jobs scraped so far)!")
             print(f"⏱️ Waiting {keyword_delay} seconds before starting next rotation cycle...")
             time.sleep(keyword_delay)
             rotation_cycle += 1
