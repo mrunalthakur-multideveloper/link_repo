@@ -7903,11 +7903,14 @@ class LinkedInScraper:
             if env_kw_max and env_kw_max.strip().isdigit() and int(env_kw_max) > 0:
                 max_jobs_per_keyword = int(env_kw_max)
             else:
-                max_jobs_per_keyword = 100
+                max_jobs_per_keyword = None
 
         if max_jobs:
             print(f"🎯 Target test job limit: {max_jobs} jobs across run")
-        print(f"🎯 Per-keyword job limit: {max_jobs_per_keyword} jobs (last 24 hours)")
+        if max_jobs_per_keyword:
+            print(f"🎯 Per-keyword job limit: {max_jobs_per_keyword} jobs (last 24 hours)")
+        else:
+            print(f"🎯 Per-keyword job limit: UNLIMITED (all jobs posted in last 24 hours)")
 
         all_jobs = []
         seen_global_ids = set()
@@ -7938,10 +7941,13 @@ class LinkedInScraper:
             print(f"🔍 [{idx+1}/{total_keywords}] Keyword: '{keyword}' | Location: '{location}'")
             print(f"{'='*60}")
 
-            # Fetch candidate jobs posted in last 24h (buffer up to 1.5x of per-keyword limit to account for easy-apply/rejected jobs)
-            search_limit = int(max_jobs_per_keyword * 1.5)
+            # Fetch candidate jobs posted in last 24h
+            if max_jobs_per_keyword:
+                search_limit = int(max_jobs_per_keyword * 1.5)
+            else:
+                search_limit = None
             if max_jobs:
-                search_limit = min(search_limit, max((max_jobs - len(all_jobs)) * 3, 25))
+                search_limit = min(search_limit, max((max_jobs - len(all_jobs)) * 3, 25)) if search_limit else max((max_jobs - len(all_jobs)) * 3, 25)
 
             raw_jobs = self.search_all_jobs(keyword, location, hours_old=24, max_results=search_limit)
 
@@ -7953,7 +7959,8 @@ class LinkedInScraper:
                     job["search_location"] = location
                     keyword_results.append(job)
 
-            print(f"   📋 {len(keyword_results)} unique new jobs to fetch for '{keyword}' (target: up to {max_jobs_per_keyword})")
+            target_limit_str = f"up to {max_jobs_per_keyword}" if max_jobs_per_keyword else "unlimited"
+            print(f"   📋 {len(keyword_results)} unique new jobs to fetch for '{keyword}' (target: {target_limit_str})")
 
             if not keyword_results:
                 if idx < total_keywords - 1:
@@ -8007,7 +8014,7 @@ class LinkedInScraper:
                             if job_post.experience:
                                 exp_count += 1
 
-                            if len(keyword_jobs) >= max_jobs_per_keyword:
+                            if max_jobs_per_keyword and len(keyword_jobs) >= max_jobs_per_keyword:
                                 print(f"\n🎯 Reached per-keyword limit ({len(keyword_jobs)}/{max_jobs_per_keyword} jobs) for '{keyword}'!")
                                 for f in future_to_job:
                                     f.cancel()

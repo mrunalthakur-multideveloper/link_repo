@@ -306,8 +306,8 @@ def main():
     proxies = os.getenv("PROXIES")
     max_jobs_env = os.getenv("MAX_JOBS")
     max_jobs = int(max_jobs_env) if max_jobs_env and max_jobs_env.strip().isdigit() and int(max_jobs_env) > 0 else None
-    max_jobs_per_kw_env = os.getenv("MAX_JOBS_PER_KEYWORD", "100")
-    max_jobs_per_kw = int(max_jobs_per_kw_env) if max_jobs_per_kw_env.strip().isdigit() and int(max_jobs_per_kw_env) > 0 else 100
+    max_jobs_per_kw_env = os.getenv("MAX_JOBS_PER_KEYWORD")
+    max_jobs_per_kw = int(max_jobs_per_kw_env) if max_jobs_per_kw_env and max_jobs_per_kw_env.strip().isdigit() and int(max_jobs_per_kw_env) > 0 else None
     keyword_delay = int(os.getenv("KEYWORD_DELAY", "30"))
 
     # Initialize scraper and database
@@ -358,7 +358,8 @@ def main():
     if len(search_targets) > 10:
         print(f"   ... and {len(search_targets) - 10} more target(s)")
     print(f"⚡ Parallel workers: {max_workers}")
-    print(f"🎯 Target limit: up to {max_jobs_per_kw} jobs/target (posted in last 24h)")
+    limit_display = f"up to {max_jobs_per_kw} jobs/target (posted in last 24h)" if max_jobs_per_kw else "UNLIMITED (all jobs posted in last 24h)"
+    print(f"🎯 Target limit: {limit_display}")
     print(f"⏱️ Rotation pause: {keyword_delay} seconds between target rotations")
     print(f"💾 Real-time storage: ENABLED (Saving to Neon DB [{backend}])")
     if max_jobs:
@@ -369,7 +370,7 @@ def main():
     else:
         print("🌐 Proxy rotation: DISABLED (Direct connection)")
 
-    continuous_mode = os.getenv("CONTINUOUS_MODE", "true").lower() in ("true", "1", "yes")
+    continuous_mode = os.getenv("CONTINUOUS_MODE", "false").lower() in ("true", "1", "yes")
     if custom_keyword or max_jobs:
         continuous_mode = False
 
@@ -445,7 +446,8 @@ def main():
 
                 except Exception as e:
                     print(f"❌ Error scraping target '{keyword}' in '{target_country}': {e}")
-                    raise
+                    time.sleep(5)
+                    continue
 
             # Reset progress to 0 after full multi-target run
             if not custom_keyword and scraper.db:
