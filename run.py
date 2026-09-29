@@ -275,31 +275,13 @@ def extract_external_link(link):
 
 def main():
 
+    if len(sys.argv) > 1 and sys.argv[1].lower() in ["--round2", "round2", "--round-2", "round-2", "2"]:
+        import run_round2
+        return run_round2.main()
+
     print("=" * 70)
     print("🚀 LINKEDIN SCRAPER - NEON DB VERSION")
     print("=" * 70)
-
-    default_keywords = [
-        "Actimize Developer","Active Directory","Agronomy Operations","AI/ML Engineer",
-        "Anti Money Laundering (AML)","Atlassian Engineer / Jira","Big Data Engineer",
-        "Bioinformatics","Bioinformatics for UK","Biotechnology","Biotechnology Internship",
-        "Business Analyst","Business Analyst for Canada","Business Intelligence Engineer",
-        "Business Intelligence Engineer Internships","Chemical Engineer","CLINICAL DATA ANALYST",
-        "Clinical Research Coordinator","Cloud Engineer","Cloud Engineer for Ireland",
-        "Computer Science","Computer Science Internship","Construction Management",
-        "Credit controller for UK","CRM Sales","CRM Specialist","Cyber security",
-        "Cybersecurity for Ireland","Cybersecurity for UK","Data Analyst",
-        "Data Analyst for Canada","Data Analyst for UK","Data Analyst Internship for Ireland",
-        "Data Analyst Internships","Database Administration","Data Center Technician",
-        "Data Engineer","Data Engineer (citizen/h4ead)","Data Engineer for UK",
-        "Data Science for Germany","Data Scientist","Design Verification Engineer",
-        "DevOps","DevOps for India","DevOps for Ireland","DevOps for UK","DevOps Internships",
-        "Dynamics 365","Electrical Engineer","Electrical Project",
-        "Electronic Health Records (EHR)","Embedded Software Engineer",
-        "Environmental Health and Safety (EHS)","Epic Analyst","ERP","Financial analyst",
-        "Financial analyst for Ireland","Frontend Engineering","Full Stack",
-        "Game Developer","Game UI / Interactive UI Designer","Generative AI"
-    ]
 
     location = os.getenv("LOCATION", "United States")
     max_workers = int(os.getenv("MAX_WORKERS", "15"))
@@ -331,19 +313,19 @@ def main():
             active_clients_count = len(getattr(scraper.db, 'active_clients', []))
             print(f"📋 Loaded {len(search_targets)} unique (keyword, country) search target(s) from {active_clients_count} active client(s)")
         else:
-            # Fallback to source database get_primary_functions or default_keywords
+            # Fallback to source database get_primary_functions
             db_functions = scraper.db.get_primary_functions() if scraper.db and scraper.db.initialized else []
             default_loc = os.getenv("LOCATION", "United States")
             if db_functions:
                 search_targets = [{"keyword": fn, "country": default_loc} for fn in db_functions]
                 print(f"📋 Loaded {len(search_targets)} primary function(s) from source table (location: '{default_loc}')")
             else:
-                print(f"ℹ️ No active clients or primary functions found. Using default keyword list (location: '{default_loc}').")
-                search_targets = [{"keyword": kw, "country": default_loc} for kw in default_keywords]
+                print(f"ℹ️ No active clients or primary functions found from database or CRM API.")
+                search_targets = []
 
         # Progress retrieval from Neon DB
         start_index = scraper.db.get_progress() if scraper.db else 0
-        if start_index >= len(search_targets):
+        if search_targets and start_index >= len(search_targets):
             print(f"🔄 Checkpoint index ({start_index}) is >= total targets ({len(search_targets)}). Resetting start index to 0.")
             start_index = 0
             if scraper.db:
@@ -377,6 +359,8 @@ def main():
     start_time = time.time()
     total_jobs = 0
     rotation_cycle = 1
+
+    interrupted = False
 
     try:
         while True:
@@ -463,16 +447,31 @@ def main():
             rotation_cycle += 1
 
     except KeyboardInterrupt:
+        interrupted = True
         print("\n🛑 Scraper stopped by user. Progress saved.")
     except Exception as e:
+        interrupted = True
         print(f"\n❌ Fatal error: {e}")
     finally:
         elapsed = time.time() - start_time
         print("\n" + "=" * 70)
-        print("✅ SCRAPER RUN SUMMARY")
+        print("✅ SCRAPER RUN SUMMARY (ROUND 1)")
         print("=" * 70)
         print(f"Jobs scraped: {total_jobs}")
         print(f"Total runtime: {elapsed/60:.1f} minutes")
+
+        # Automatically start Round 2 after Round 1 completes
+        auto_round2 = os.getenv("AUTO_RUN_ROUND2", "true").lower() in ("true", "1", "yes")
+        round1_only = len(sys.argv) > 1 and sys.argv[1].lower() in ["--round1", "--round1-only", "round1"]
+        if not interrupted and auto_round2 and not round1_only and not custom_keyword and not max_jobs:
+            print("\n" + "=" * 70)
+            print("🚀 ROUND 1 COMPLETE -> AUTOMATICALLY STARTING ROUND 2 (KEYWORD SCRAPER)")
+            print("=" * 70)
+            try:
+                import run_round2
+                run_round2.main()
+            except Exception as e:
+                print(f"❌ Error running Round 2: {e}")
 
 
 if __name__ == "__main__":

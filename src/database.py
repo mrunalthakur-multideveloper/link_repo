@@ -681,10 +681,11 @@ class NeonDatabaseManager:
             print(f"⚠️ Error reading active clients from Neon DB: {e}")
             return []
 
-    def fetch_and_sync_active_clients(self, domain_filter: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Hit the CRM active clients endpoint (https://api.applyus.org/api/clients/active)
+    def fetch_and_sync_active_clients(self, domain_filter: Optional[str] = None, endpoint_path: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Hit the CRM active clients endpoint (https://api.applyus.org/api/clients/active or /api/clients/active-domains)
         using INTERNAL_SERVICE_API_KEY from .env, and persist results to Neon DB."""
-        endpoint_path = os.getenv("CRM_ENDPOINT_PATH", self.crm_endpoint_path).strip()
+        if not endpoint_path:
+            endpoint_path = os.getenv("CRM_ENDPOINT_PATH", self.crm_endpoint_path).strip()
         if not endpoint_path.startswith("/"):
             endpoint_path = "/" + endpoint_path
         backend_url = (os.getenv("CRM_BACKEND_URL") or self.crm_backend_url).strip().rstrip("/")
@@ -797,6 +798,101 @@ class NeonDatabaseManager:
                     })
 
         return targets
+
+    def get_round2_search_targets(self, domain_filter: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Fetch active clients with keywords from CRM API (/api/clients/active-domains).
+        Strict deduplication rule:
+          - If two or more clients have the same domain in the same country,
+            we DO NOT search repeatedly. That (domain, country) pair is scraped ONCE.
+          - Aggregates unique technical keywords for that domain across all clients in that domain.
+        Returns a list of deduplicated domain targets:
+          [
+            {
+              "domain": "Frontend Engineer",
+              "country": "Ireland",
+              "keywords": ["React", "TypeScript", ...],
+              "desired_job_titles": ["Frontend Developer", ...],
+              "client_names": ["Ashok Peddi"],
+              "lead_ids": ["88c98405-..."]
+            },
+            ...
+          ]
+        """
+        clients = self.fetch_and_sync_active_clients(
+            domain_filter=domain_filter,
+            endpoint_path="/api/clients/active-domains"
+        )
+        if not clients:
+            return []
+
+        default_country = os.getenv("LOCATION", "United States").strip() or "United States"
+        grouped: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+        for client in clients:
+            # 1. Domain
+            raw_domain = client.get("domain") or (client.get("desired_job_titles")[0] if isinstance(client.get("desired_job_titles"), list) and client.get("desired_job_titles") else None) or "Software Engineer"
+            domain_clean = str(raw_domain).strip()
+            if not domain_clean:
+                domain_clean = "Software Engineer"
+
+            # 2. Country
+            raw_country = client.get("country") or client.get("country_name") or default_country
+            country_clean = str(raw_country).strip()
+            if not country_clean:
+                country_clean = default_country
+
+            # 3. Strict Deduplication Key: (domain.lower(), country.lower())
+            dedup_key = (domain_clean.lower(), country_clean.lower())
+
+            if dedup_key not in grouped:
+                grouped[dedup_key] = {
+                    "domain": domain_clean,
+                    "country": country_clean,
+                    "keywords": [],
+                    "desired_job_titles": [],
+                    "client_names": [],
+                    "lead_ids": [],
+                    "_seen_keywords": set(),
+                    "_seen_titles": set(),
+                }
+
+            target = grouped[dedup_key]
+
+            # Add client name & lead_id
+            name = client.get("full_name") or f"{client.get('first_name', '')} {client.get('last_name', '')}".strip()
+            if name and name not in target["client_names"]:
+                target["client_names"].append(name)
+            lid = client.get("lead_id") or client.get("id")
+            if lid and lid not in target["lead_ids"]:
+                target["lead_ids"].append(str(lid))
+
+            # Add keywords (case-preserving, deduplicated)
+            raw_kws = client.get("keywords") or []
+            if isinstance(raw_kws, list):
+                for kw in raw_kws:
+                    kw_str = str(kw).strip()
+                    if kw_str and kw_str.lower() not in target["_seen_keywords"]:
+                        target["_seen_keywords"].add(kw_str.lower())
+                        target["keywords"].append(kw_str)
+
+            # Add desired_job_titles
+            raw_titles = client.get("desired_job_titles") or []
+            if isinstance(raw_titles, list):
+                for t in raw_titles:
+                    t_str = str(t).strip()
+                    if t_str and t_str.lower() not in target["_seen_titles"]:
+                        target["_seen_titles"].add(t_str.lower())
+                        target["desired_job_titles"].append(t_str)
+
+        # Cleanup internal tracking sets
+        final_targets = []
+        for t in grouped.values():
+            t.pop("_seen_keywords", None)
+            t.pop("_seen_titles", None)
+            final_targets.append(t)
+
+        return final_targets
 
     def get_client_search_keywords(self, domain_filter: Optional[str] = None) -> List[str]:
         """Extract unique search keywords directly from active clients' desired_job_titles (backwards compatibility)."""

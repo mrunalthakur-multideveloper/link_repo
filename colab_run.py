@@ -36,7 +36,7 @@ MAX_WORKERS=15
 KEYWORD_DELAY=30
 CONTINUOUS_MODE=false
 
-PROXIES=http://ggmcopdi-rotate:tg8xvu345xss@p.webshare.io:80
+PROXIES=http://ltrabmxv-rotate:ayq2lqvdcey2@p.webshare.io:80
 """
 
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
